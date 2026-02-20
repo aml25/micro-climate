@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx create-next-app@latest:*)",
+      "Bash(rsync:*)",
+      "Bash(npm install:*)",
+      "Bash(python3:*)",
+      "Bash(ls:*)",
+      "Bash(npm run build:*)",
+      "Bash(node -e:*)",
+      "Bash(curl:*)",
+      "Bash(KEY=8289b5a7fb53477189b5a7fb53e7715b)",
+      "Bash(/usr/bin/curl:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
+    ]
+  }
+}
