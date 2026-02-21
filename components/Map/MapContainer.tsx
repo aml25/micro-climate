@@ -1,31 +1,60 @@
 "use client";
 
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useEffect, useState } from "react";
 import Map, { MapProvider, GeolocateControl } from "react-map-gl/mapbox";
 import type { MapRef } from "react-map-gl/mapbox";
 import type { GeolocateControl as GeolocateControlType } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { PWSStation } from "@/types/weather";
+import type { Metric } from "@/lib/metrics";
 import { HeatmapLayer } from "./HeatmapLayer";
 import { StationMarkers } from "./StationMarkers";
 
 const SF_FALLBACK = { lat: 37.773, lon: -122.431 };
 const MAPBOX_STYLE = "mapbox://styles/mapbox/dark-v11";
 
+// Set to true to show individual station markers on the map.
+// Can also be toggled at runtime via the browser console: __showStationMarkers(true)
+const SHOW_STATION_MARKERS = false;
+
 interface MapContainerProps {
   stations: PWSStation[];
+  activeMetric: Metric;
   onCoordsChange: (coords: { lat: number; lon: number }, status: "granted" | "denied") => void;
   onMapCenter: (lat: number, lon: number) => void;
+  onInteractionStart?: () => void;
 }
 
-export function MapContainer({ stations, onCoordsChange, onMapCenter }: MapContainerProps) {
+export function MapContainer({ stations, activeMetric, onCoordsChange, onMapCenter, onInteractionStart }: MapContainerProps) {
   const token = process.env.NEXT_PUBLIC_MAPBOX_TOKEN;
   const mapRef = useRef<MapRef>(null);
   const geoRef = useRef<GeolocateControlType>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [showMarkers, setShowMarkers] = useState(SHOW_STATION_MARKERS);
+
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).__showStationMarkers = (val: boolean) => setShowMarkers(val);
+  }, []);
 
   const handleLoad = useCallback(() => {
     geoRef.current?.trigger();
+    setMapLoaded(true);
   }, []);
+
+  // Use the native Mapbox movestart event — it includes originalEvent for user
+  // interactions (mouse/touch/wheel) but not for programmatic moves (flyTo, easeTo)
+  useEffect(() => {
+    if (!mapLoaded || !mapRef.current) return;
+    const nativeMap = mapRef.current.getMap();
+    if (!nativeMap) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handler = (e: any) => {
+      if (e?.originalEvent) onInteractionStart?.();
+    };
+    nativeMap.on("movestart", handler);
+    return () => { nativeMap.off("movestart", handler); };
+  }, [mapLoaded, onInteractionStart]);
 
   const handleGeolocate = useCallback(
     (e: { coords: GeolocationCoordinates }) => {
@@ -80,8 +109,8 @@ export function MapContainer({ stations, onCoordsChange, onMapCenter }: MapConta
           />
           {stations.length > 0 && (
             <>
-              <HeatmapLayer stations={stations} />
-              <StationMarkers stations={stations} />
+              <HeatmapLayer stations={stations} activeMetric={activeMetric} />
+              {showMarkers && <StationMarkers stations={stations} />}
             </>
           )}
         </Map>

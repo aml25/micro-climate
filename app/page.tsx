@@ -1,11 +1,13 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import useSWR from "swr";
 import dynamic from "next/dynamic";
 import { Spinner, Chip } from "@heroui/react";
 import type { StationsResponse } from "@/types/weather";
+import type { Metric } from "@/lib/metrics";
 import { haversineKm } from "@/lib/interpolation/point-idw";
+import { Legend } from "@/components/Map/Legend";
 
 // Mapbox requires a browser environment — load dynamically with no SSR
 const MapContainer = dynamic(
@@ -17,15 +19,22 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 // Trigger a new station fetch when the map center moves more than half the fetch radius
 const REFETCH_DISTANCE_KM = 16; // ~10 miles (fetch radius is 20 miles)
 
-async function fetcher(url: string): Promise<StationsResponse> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
 export default function HomePage() {
   const [fetchCoords, setFetchCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [geoStatus, setGeoStatus] = useState<"pending" | "granted" | "denied">("pending");
+  const [activeMetric, setActiveMetric] = useState<Metric>("temperature");
+
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const isInteractingRef = useRef(false);
+
+  const fetcher = useCallback(async (url: string): Promise<StationsResponse> => {
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }, []);
 
   // Called by GeolocateControl on first fix — seeds the initial fetch location
   const handleCoordsChange = useCallback(
@@ -36,8 +45,15 @@ export default function HomePage() {
     []
   );
 
-  // Called by MapContainer on every onMoveEnd — refetches if the center has moved far enough
+  // Abort the in-flight request immediately when the user starts panning
+  const handleInteractionStart = useCallback(() => {
+    isInteractingRef.current = true;
+    abortControllerRef.current?.abort();
+  }, []);
+
+  // Called once when the map settles (moveend) — fetch immediately if center moved enough
   const handleMapCenter = useCallback((lat: number, lon: number) => {
+    isInteractingRef.current = false;
     setFetchCoords((prev) => {
       if (!prev) return prev;
       return haversineKm(prev.lat, prev.lon, lat, lon) > REFETCH_DISTANCE_KM
@@ -52,22 +68,25 @@ export default function HomePage() {
 
   const { data, error, isLoading } = useSWR<StationsResponse>(swrKey, fetcher, {
     refreshInterval: POLL_INTERVAL_MS,
+    isPaused: () => isInteractingRef.current,
   });
 
   const stations = data?.stations ?? [];
   const fetchedAt = data?.fetchedAt;
 
   return (
-    <div style={{ width: "100vw", height: "100vh", position: "relative" }}>
+    <div className="relative w-screen h-screen">
       <MapContainer
         stations={stations}
+        activeMetric={activeMetric}
         onCoordsChange={handleCoordsChange}
         onMapCenter={handleMapCenter}
+        onInteractionStart={handleInteractionStart}
       />
 
       {/* Locating chip */}
       {geoStatus === "pending" && (
-        <div style={{ position: "absolute", top: 12, left: 12, zIndex: 20 }}>
+        <div className="absolute top-3 left-3 z-20">
           <Chip color="default" variant="flat" size="sm">
             Locating you…
           </Chip>
@@ -76,24 +95,14 @@ export default function HomePage() {
 
       {/* Loading overlay */}
       {isLoading && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,0.4)",
-            zIndex: 20,
-          }}
-        >
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/40">
           <Spinner size="lg" color="white" />
         </div>
       )}
 
       {/* Error badge */}
       {error && (
-        <div style={{ position: "absolute", top: 12, right: 12, zIndex: 20 }}>
+        <div className="absolute top-3 right-3 z-20">
           <Chip color="danger" variant="solid">
             Failed to load station data
           </Chip>
@@ -102,12 +111,17 @@ export default function HomePage() {
 
       {/* Last-updated chip */}
       {fetchedAt && (
-        <div style={{ position: "absolute", bottom: 24, left: 12, zIndex: 20 }}>
+        <div className="absolute bottom-6 left-3 z-20">
           <Chip color="default" variant="flat" size="sm">
             Updated {new Date(fetchedAt).toLocaleTimeString()}
           </Chip>
         </div>
       )}
+
+      {/* Legend + metric switcher */}
+      <div className="absolute bottom-6 right-3 z-20">
+        <Legend activeMetric={activeMetric} onMetricChange={setActiveMetric} />
+      </div>
     </div>
   );
 }

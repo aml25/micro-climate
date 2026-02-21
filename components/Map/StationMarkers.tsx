@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Source, Layer, useMap } from "react-map-gl/mapbox";
 import type { CircleLayerSpecification, MapMouseEvent } from "react-map-gl/mapbox";
-import { Tooltip } from "@heroui/react";
+import { Tooltip, Divider } from "@heroui/react";
 import { featureCollection, point } from "@turf/helpers";
 import type { PWSStation } from "@/types/weather";
 
@@ -101,13 +101,30 @@ export function StationMarkers({ stations }: StationMarkersProps) {
           <Tooltip
             isOpen
             content={
-              <div className="text-sm">
-                <p className="font-semibold">{hovered.station.stationID}</p>
+              <div className="flex flex-col gap-1 py-0.5 min-w-32">
+                <p className="font-semibold text-small">
+                  {hovered.station.neighborhood || hovered.station.stationID}
+                </p>
                 {hovered.station.neighborhood && (
-                  <p className="text-default-400">{hovered.station.neighborhood}</p>
+                  <p className="text-tiny text-default-400">{hovered.station.stationID}</p>
                 )}
-                <p>{hovered.station.tempF.toFixed(1)}°F</p>
-                <p className="text-default-400">Updated {updatedAgo}m ago</p>
+                <Divider className="my-0.5" />
+                <div className="flex flex-col gap-0.5 text-small">
+                  <div className="flex justify-between gap-4">
+                    <span className="text-default-400">Temp</span>
+                    <span className="font-medium">{hovered.station.tempF.toFixed(1)}°F</span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-default-400">Humidity</span>
+                    <span className="font-medium">{hovered.station.humidity.toFixed(0)}%</span>
+                  </div>
+                  <div className="flex justify-between gap-4">
+                    <span className="text-default-400">Wind</span>
+                    <span className="font-medium">{hovered.station.windspeedmph.toFixed(1)} mph</span>
+                  </div>
+                </div>
+                <Divider className="my-0.5" />
+                <p className="text-tiny text-default-400">Updated {updatedAgo}m ago</p>
               </div>
             }
           >
