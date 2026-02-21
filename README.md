@@ -1,6 +1,6 @@
 # micro-climate
 
-A full-screen weather heatmap powered by hyper-local data from the [Synoptic Data](https://synopticdata.com/) personal weather station network. Opens on your location, shows real-time readings from nearby stations, and renders a smooth color overlay for temperature, humidity, or wind speed.
+A full-screen weather heatmap powered by hyper-local data from the [Synoptic Data](https://synopticdata.com/) personal weather station network. Opens on your location, shows real-time readings from nearby stations, and renders a smooth color overlay for temperature, humidity, or wind speed. The overlay uses a canvas layer with CSS `mix-blend-mode: multiply` over a grayscale street map — roads appear as dark streaks through vivid heatmap colors without either washing out.
 
 ## Getting Started
 

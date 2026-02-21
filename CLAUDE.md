@@ -25,8 +25,8 @@ npm run lint   # ESLint check
 1. Map loads → `GeolocateControl` auto-triggers → browser asks for location
 2. On fix: `onCoordsChange` in `MapContainer` → `page.tsx` sets `fetchCoords` → SWR key becomes `/api/stations?lat=&lon=`
 3. `/api/stations` calls `synoptic.ts` → fetches stations within 20-mile radius → filters outliers → returns `StationsResponse`
-4. Stations passed to `MapContainer` → `HeatmapLayer` + `StationMarkers`
-5. `HeatmapLayer` listens to `moveend` on the native Mapbox map → updates viewport bbox → `useMemo` recomputes IDW grid → Mapbox source updated
+4. Stations passed to `MapContainer` → `HeatmapCanvas` + `StationMarkers`
+5. `HeatmapCanvas` listens to `moveend` on the native Mapbox map → updates viewport bbox → `useMemo` recomputes IDW grid → stored in ref → canvas redraws on every `move` frame
 6. As user pans: `onMoveEnd` → `page.tsx` `handleMapCenter` → if moved >16 km from last fetch point, updates `fetchCoords` → new SWR fetch fires immediately
 7. User interaction abort: `movestart` with `originalEvent` (user-initiated) → aborts in-flight fetch → `isInteractingRef = true` → SWR polling paused; `moveend` clears interaction state and triggers fresh fetch if needed
 
@@ -51,22 +51,28 @@ npm run lint   # ESLint check
 
 ### Heatmap rendering
 
-`components/Map/HeatmapLayer.tsx`:
-- Tracks `bbox` and `cellSize` (bucketed zoom) separately — raw zoom changes within the same cell-size bucket don't trigger grid recomputes
-- Deduplicates bbox updates (value comparison before `setState`) to avoid spurious memo invalidation
-- `fill-opacity` expression: `["*", globalOpacity, ["get", "alpha"]]` — combines fade-in animation with per-cell organic boundary
-- `fill-outline-color: rgba(0,0,0,0)` removes grid lines
-- `slot: "middle"` in Mapbox Standard Style — places heatmap below roads and labels so they render fully on top
-- Opacity: 0.65 — dark-v11 base makes colors vivid; roads/labels show above at full opacity
+`components/Map/HeatmapCanvas.tsx` — HTML canvas overlay, not a Mapbox GL layer:
+- Absolutely-positioned `<canvas>` over the map at `z-index: 1`; `pointerEvents: none`
+- `mix-blend-mode: multiply` in CSS — multiplies heatmap color against the grayscale base: white areas take the full heatmap hue, dark roads stay dark through it
+- Base map (`streets-v12`) desaturated via `.mapboxgl-canvas { filter: grayscale(100%) }` in `globals.css` — removes green/blue map tints that would skew heatmap colors under multiply
+- GPS marker rendered above canvas via `.mapboxgl-user-location* { z-index: 2 }` in `globals.css`
+- **Render loop split**: IDW recomputes on `moveend` (expensive, stored in `gridRef`); canvas redraws on every `move` frame (cheap, reads from ref) — smooth animation during pan/zoom
+- `renderFrame` uses refs (`gridRef`, `activeMetricRef`, `zoomRef`) for all changing data — stable callback identity means map event listeners are never re-registered
+- Canvas sized to match Mapbox GL canvas physical dimensions; `ctx.scale(dpr, dpr)` for correct CSS pixel drawing
+- Each cell projected via `map.project([lon, lat])` → screen coords, drawn with `fillRect` using cell's bounding box + 0.5px bleed on each edge to eliminate sub-pixel gaps (grid lines)
+- `valueToRgb` JS color interpolation mirrors Mapbox's `interpolate linear` expression
+- Tracks `bbox` and `cellSize` (bucketed zoom) separately — raw zoom changes within the same bucket don't retrigger the grid
+- Bbox deduplication (value comparison before `setState`) prevents spurious memo invalidation
 - Cell size: 0.5 km (zoom ≥12), 1 km (≥10), 2 km (≥8), 4 km (<8)
 - Bbox padding: 20% on each side — grid edge stays offscreen during small pans without over-computing
+- CSS opacity fade (0→1, 500ms ease) on new station data or metric switch
 
 ### Metrics
 
 `lib/metrics.ts` is the single source of truth for all three visualizable metrics:
 - `temperature` (°F), `humidity` (%), `windspeedmph` (mph)
 - Each has `label`, `unit`, and color `stops` (value → hex)
-- `METRICS` drives both the Legend gradient and the Mapbox `fill-color` expression in `HeatmapLayer`
+- `METRICS` drives both the Legend gradient and the `valueToRgb` color mapping in `HeatmapCanvas`
 - `METRIC_ORDER` defines pagination order in the Legend
 
 ---
@@ -83,7 +89,7 @@ npm run lint   # ESLint check
 | `lib/interpolation/point-idw.ts` | Point-query IDW + haversine for pan-threshold check |
 | `lib/metrics.ts` | Metric config (label, unit, color stops) for all 3 metrics |
 | `components/Map/MapContainer.tsx` | Map wrapper; GeolocateControl; native movestart listener for abort |
-| `components/Map/HeatmapLayer.tsx` | Dynamic heatmap fill layer; viewport tracking; fade animations |
+| `components/Map/HeatmapCanvas.tsx` | Canvas overlay heatmap; viewport tracking; multiply blend; fade animations |
 | `components/Map/StationMarkers.tsx` | Circle layer + HeroUI Tooltip (off by default — see below) |
 | `components/Map/Legend.tsx` | Gradient bar with hover tooltip; HeroUI Pagination for metric switching |
 | `types/weather.ts` | `PWSStation`, `StationsResponse` interfaces |
@@ -126,14 +132,20 @@ Originally used `@turf/interpolate` to generate the grid geometry AND run IDW. T
 ### 3-second debounce (removed)
 Initially added a 3-second delay after `moveend` before triggering a new station fetch, to avoid hammering the API during panning. After IDW performance was fixed, the debounce added unnecessary latency. Removed — the abort-on-interaction pattern already handles request hygiene, and `moveend` only fires once per gesture (including after momentum).
 
-### Map style exploration (dark-v11 → light-v11 → dark-v11)
-Tried `light-v11` to get dark/black road lines visible against the heatmap. Didn't work — light-v11's white base completely washes out heatmap colors (80% vivid color over white = pastel). Reverted to `dark-v11`. Dark base makes heatmap colors vivid; roads/labels render above via `slot: "middle"` at full opacity.
+### Map style exploration (dark-v11 → light-v11 → dark-v11 → streets-v12)
+Tried `light-v11` to get dark road lines against the heatmap. Didn't work — light-v11's white base washes out heatmap colors (vivid color × white = pastel). Reverted to `dark-v11`. Dark base kept heatmap vivid but gray roads had limited contrast. Eventually replaced entire approach with canvas overlay (see below).
 
 ### Mapbox slot exploration (`beforeId` → `slot: "middle"` → `slot: "top"` → `slot: "middle"`)
+During the `HeatmapLayer` era:
 - `beforeId: "road-motorway-trunk"` — failed; dark-v11 is Standard Style, individual layer IDs not exposed
 - `slot: "middle"` — correct for Standard Style; documented as "above terrain, below roads and labels"
-- `slot: "top"` — tried to improve road visibility; made things worse (heatmap above roads, roads only 30% visible through transparency)
-- Back to `slot: "middle"` — roads fully above at 100% opacity; contrast is acceptable on dark base
+- `slot: "top"` — tried to improve road visibility; made things worse (heatmap above roads)
+- Back to `slot: "middle"` — roads above at 100% opacity; but contrast still not great on dark base
+
+### Mapbox fill layer → HTML canvas overlay (`HeatmapLayer` → `HeatmapCanvas`)
+Core issue: Mapbox GL JS has no per-layer CSS `mix-blend-mode` equivalent in WebGL. The slot system only controls z-ordering, not color blending — so the heatmap always obscured or was obscured by map features rather than blending with them.
+
+Solution: replaced `HeatmapLayer` (GeoJSON `Source` + `Layer`) with `HeatmapCanvas` — an HTML `<canvas>` absolutely positioned over the map with `mix-blend-mode: multiply` in CSS. Switched base style to `streets-v12` (cream/white base + dark charcoal roads) and desaturated it with `.mapboxgl-canvas { filter: grayscale(100%) }`. Result: roads show as clearly darker streaks through the vivid heatmap color; green forests and blue water no longer tint the overlay. Both map and heatmap are simultaneously sharp.
 
 ### Bbox padding reduction (0.5 → 0.2)
 Original 50% padding on each side = 4× viewport area to compute. Reduced to 20% (2.25× viewport). Enough to cover small pans without recompute, while significantly reducing cell count.
@@ -149,5 +161,4 @@ Discovered that at zoom 4 (USA view), the padded bbox at 4km cells = ~1.35M cell
 ## Known Constraints & Trade-offs
 
 - **Main-thread IDW**: Grid computation still runs synchronously on the main thread. For very dense station sets or large viewports near MIN_ZOOM, this could be slow. A Web Worker would be the right long-term fix.
-- **Mapbox blend modes**: No per-layer CSS `mix-blend-mode` equivalent in WebGL/Mapbox GL JS. The slot system is the only tool for layering; true multiply/screen blending would require a custom WebGL layer or canvas overlay.
-- **dark-v11 road contrast**: Gray road lines in dark-v11 have limited contrast against vivid heatmap colors. This is inherent to the style — roads are designed to show against a dark neutral background, not against colored fills.
+- **Canvas overlay vs WebGL**: The canvas is rasterized by the browser compositor, not Mapbox's WebGL pipeline. This means it won't participate in Mapbox's 3D terrain, tilt, or custom projections. Fine for a flat 2D map.

@@ -7,11 +7,11 @@ import type { GeolocateControl as GeolocateControlType } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { PWSStation } from "@/types/weather";
 import type { Metric } from "@/lib/metrics";
-import { HeatmapLayer } from "./HeatmapLayer";
+import { HeatmapCanvas } from "./HeatmapCanvas";
 import { StationMarkers } from "./StationMarkers";
 
 const SF_FALLBACK = { lat: 37.773, lon: -122.431 };
-const MAPBOX_STYLE = "mapbox://styles/mapbox/dark-v11";
+const MAPBOX_STYLE = "mapbox://styles/mapbox/streets-v12";
 
 // Set to true to show individual station markers on the map.
 // Can also be toggled at runtime via the browser console: __showStationMarkers(true)
@@ -109,7 +109,7 @@ export function MapContainer({ stations, activeMetric, onCoordsChange, onMapCent
           />
           {stations.length > 0 && (
             <>
-              <HeatmapLayer stations={stations} activeMetric={activeMetric} />
+              <HeatmapCanvas stations={stations} activeMetric={activeMetric} />
               {showMarkers && <StationMarkers stations={stations} />}
             </>
           )}

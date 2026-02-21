@@ -12,3 +12,16 @@ body {
   margin: 0;
   padding: 0;
 }
+
+/* Desaturate the base map so heatmap colors aren't skewed by greens/blues.
+   Targets only the Mapbox GL canvas — the HeatmapCanvas overlay is unaffected. */
+.mapboxgl-canvas {
+  filter: grayscale(100%);
+}
+
+/* GPS location marker sits above the heatmap canvas overlay (z-index: 1) */
+.mapboxgl-user-location,
+.mapboxgl-user-location-dot,
+.mapboxgl-user-location-accuracy-circle {
+  z-index: 2;
+}
