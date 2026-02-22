@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working Instructions
+
+Before committing, always update `CLAUDE.md` and `README.md` to reflect any changes made — without being asked. Commit the doc updates in the same commit as the code, or as an immediate follow-up if the code was already committed.
+
+---
+
 ## Dev Commands
 
 ```bash
