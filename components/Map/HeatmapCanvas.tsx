@@ -6,7 +6,7 @@ import { interpolateTemperatures } from "@/lib/interpolation/idw";
 import { METRICS } from "@/lib/metrics";
 import type { Metric, MetricStop } from "@/lib/metrics";
 import type { PWSStation } from "@/types/weather";
-import type { FeatureCollection, Polygon, GeoJsonProperties } from "geojson";
+import type { GridResult } from "@/lib/interpolation/idw";
 
 const MIN_ZOOM = 7;
 const BBOX_PADDING = 0.2;
@@ -55,6 +55,7 @@ interface HeatmapCanvasProps {
 export function HeatmapCanvas({ stations, activeMetric }: HeatmapCanvasProps) {
   const { current: map } = useMap();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const offscreenRef = useRef<HTMLCanvasElement | null>(null);
 
   const [bbox, setBbox] = useState<Bbox | null>(null);
   const [zoom, setZoom] = useState(12);
@@ -64,7 +65,7 @@ export function HeatmapCanvas({ stations, activeMetric }: HeatmapCanvasProps) {
 
   // Refs let the stable renderFrame function always read the latest values
   // without needing to be recreated (which would re-register map event listeners)
-  const gridRef = useRef<FeatureCollection<Polygon, GeoJsonProperties> | null>(null);
+  const gridRef = useRef<GridResult | null>(null);
   const activeMetricRef = useRef(activeMetric);
   const zoomRef = useRef(zoom);
   useEffect(() => { activeMetricRef.current = activeMetric; }, [activeMetric]);
@@ -139,8 +140,10 @@ export function HeatmapCanvas({ stations, activeMetric }: HeatmapCanvasProps) {
   }, [activeMetric]);
 
   /**
-   * Draws the current grid onto the canvas. Runs every map `move` frame
-   * (smooth during panning) AND whenever the grid or metric changes.
+   * Draws the current grid onto the canvas using an offscreen canvas scaled up
+   * with imageSmoothingEnabled — each IDW cell is one pixel on the offscreen
+   * canvas; bilinear scaling produces smooth gradients with no grid lines.
+   *
    * Reads grid/metric/zoom from refs so this function never needs to be
    * recreated — stable identity means map listeners aren't re-registered.
    */
@@ -166,38 +169,62 @@ export function HeatmapCanvas({ stations, activeMetric }: HeatmapCanvasProps) {
 
     if (!currentGrid || currentZoom < MIN_ZOOM) return;
 
-    const dpr = window.devicePixelRatio || 1;
+    const { cols, rows, west, south, east, north, cells } = currentGrid;
     const stops = METRICS[currentMetric].stops;
 
-    ctx.save();
-    // Scale so we can draw in CSS pixel coordinates (same space as map.project())
-    ctx.scale(dpr, dpr);
+    // Create or resize the offscreen canvas (one pixel per IDW cell)
+    if (
+      !offscreenRef.current ||
+      offscreenRef.current.width !== cols ||
+      offscreenRef.current.height !== rows
+    ) {
+      const oc = document.createElement("canvas");
+      oc.width = cols;
+      oc.height = rows;
+      offscreenRef.current = oc;
+    }
+    const offscreen = offscreenRef.current;
+    const offCtx = offscreen.getContext("2d");
+    if (!offCtx) return;
 
-    for (const feature of currentGrid.features) {
-      const props = feature.properties;
-      if (!props || props.alpha <= 0) continue;
+    // Write one RGBA pixel per cell into an ImageData buffer.
+    // Grid row 0 = southmost; ImageData row 0 = top = north → flip y axis.
+    const imageData = offCtx.createImageData(cols, rows);
+    const buf = imageData.data;
 
-      const ring = feature.geometry.coordinates[0];
-      const value = props[currentMetric] as number;
-      const [r, g, b] = valueToRgb(value, stops);
-
-      // Project the 4 cell corners from [lon, lat] → CSS pixel coordinates.
-      // Use the bounding box + 0.5px bleed so adjacent cells overlap slightly,
-      // eliminating sub-pixel gaps that would otherwise appear as grid lines.
-      const p0 = map.project([ring[0][0], ring[0][1]]);
-      const p1 = map.project([ring[1][0], ring[1][1]]);
-      const p2 = map.project([ring[2][0], ring[2][1]]);
-      const p3 = map.project([ring[3][0], ring[3][1]]);
-
-      const minX = Math.min(p0.x, p1.x, p2.x, p3.x);
-      const maxX = Math.max(p0.x, p1.x, p2.x, p3.x);
-      const minY = Math.min(p0.y, p1.y, p2.y, p3.y);
-      const maxY = Math.max(p0.y, p1.y, p2.y, p3.y);
-
-      ctx.fillStyle = `rgba(${r},${g},${b},${props.alpha})`;
-      ctx.fillRect(minX - 0.5, minY - 0.5, maxX - minX + 1, maxY - minY + 1);
+    for (let row = 0; row < rows; row++) {
+      const imgRow = rows - 1 - row; // flip: grid south = image bottom
+      for (let col = 0; col < cols; col++) {
+        const cell = cells[row * cols + col];
+        const value = cell[currentMetric as keyof typeof cell] as number;
+        const [r, g, b] = valueToRgb(value, stops);
+        const px = (imgRow * cols + col) * 4;
+        buf[px]     = r;
+        buf[px + 1] = g;
+        buf[px + 2] = b;
+        buf[px + 3] = Math.round(cell.alpha * 255);
+      }
     }
 
+    offCtx.putImageData(imageData, 0, 0);
+
+    // Project the grid's geographic bounds to CSS pixel coordinates, then
+    // drawImage scaled up — browser bilinear interpolation smooths the pixels.
+    const dpr = window.devicePixelRatio || 1;
+    const topLeft     = map.project([west, north]);
+    const bottomRight = map.project([east, south]);
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(
+      offscreen,
+      topLeft.x,
+      topLeft.y,
+      bottomRight.x - topLeft.x,
+      bottomRight.y - topLeft.y,
+    );
     ctx.restore();
   }, [map]); // stable — all changing data read via refs
 
@@ -226,9 +253,6 @@ export function HeatmapCanvas({ stations, activeMetric }: HeatmapCanvasProps) {
         left: 0,
         width: "100%",
         height: "100%",
-        // multiply: dark map features (roads, labels) stay dark against vivid heatmap colors;
-        // the cream/white base of streets-v12 takes on the full heatmap hue.
-        // Roads appear as clearly darker streaks — both heatmap and map lines are sharp.
         mixBlendMode: "multiply",
         pointerEvents: "none",
         zIndex: 1,

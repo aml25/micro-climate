@@ -1,16 +1,18 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Card, CardBody, Pagination } from "@heroui/react";
+import { Card, CardBody, Tabs, Tab } from "@heroui/react";
 import { METRICS, METRIC_ORDER } from "@/lib/metrics";
 import type { Metric } from "@/lib/metrics";
 
-interface LegendProps {
-  activeMetric: Metric;
-  onMetricChange: (metric: Metric) => void;
-}
+const TAB_LABELS: Record<Metric, string> = {
+  temperature: "Temperature",
+  windspeedmph: "Wind",
+  humidity: "Humidity",
+};
 
-/** Linear interpolation between stop values based on cursor position (0–1) */
+const TICK_COUNT = 5; // 5 labels = 4 equal divisions
+
+/** Interpolated value at a fractional position (0–1) along the gradient */
 function interpolateValue(stops: { value: number }[], position: number): number {
   const n = stops.length;
   const scaled = position * (n - 1);
@@ -19,81 +21,62 @@ function interpolateValue(stops: { value: number }[], position: number): number 
   return stops[i].value + t * (stops[i + 1].value - stops[i].value);
 }
 
+interface LegendProps {
+  activeMetric: Metric;
+  onMetricChange: (metric: Metric) => void;
+}
+
 export function Legend({ activeMetric, onMetricChange }: LegendProps) {
   const metric = METRICS[activeMetric];
-  const page = METRIC_ORDER.indexOf(activeMetric) + 1;
   const gradient = `linear-gradient(to right, ${metric.stops.map((s) => s.color).join(", ")})`;
-
-  const barRef = useRef<HTMLDivElement>(null);
-  const [hoverX, setHoverX] = useState<number | null>(null);
-  const [hoverValue, setHoverValue] = useState<number | null>(null);
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = barRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const p = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    setHoverX(p * rect.width);
-    setHoverValue(interpolateValue(metric.stops, p));
-  };
-
-  const handleMouseLeave = () => {
-    setHoverX(null);
-    setHoverValue(null);
-  };
+  const ticks = Array.from({ length: TICK_COUNT }, (_, i) =>
+    Math.round(interpolateValue(metric.stops, i / (TICK_COUNT - 1)))
+  );
 
   return (
-    <Card shadow="sm" className="min-w-0">
-      <CardBody className="px-3 py-2 gap-2">
-        <p className="text-tiny font-medium text-default-400 uppercase tracking-widest">
-          {metric.label}
-        </p>
-
-        {/* Gradient bar with hover interaction */}
-        <div
-          ref={barRef}
-          className="relative h-2 w-40 rounded-full cursor-crosshair"
-          style={{ background: gradient }}
-          onMouseMove={handleMouseMove}
-          onMouseLeave={handleMouseLeave}
+    <Card shadow="md" className="w-full">
+      <CardBody className="px-4 pt-1 pb-3 gap-3">
+        <Tabs
+          selectedKey={activeMetric}
+          onSelectionChange={(key) => onMetricChange(key as Metric)}
+          size="sm"
+          variant="underlined"
+          classNames={{ panel: "hidden" }}
         >
-          {hoverX !== null && hoverValue !== null && (
-            <>
-              {/* Cursor line */}
-              <div
-                className="absolute top-0 bottom-0 w-px bg-white/80 pointer-events-none"
-                style={{ left: hoverX }}
-              />
-              {/* Value label — clamp to bar edges so it never overflows */}
-              <div
-                className="absolute -top-6 -translate-x-1/2 bg-foreground text-background text-tiny font-medium px-1.5 py-0.5 rounded pointer-events-none whitespace-nowrap"
+          {METRIC_ORDER.map((key) => (
+            <Tab key={key} title={TAB_LABELS[key]} />
+          ))}
+        </Tabs>
+
+        <div className="relative h-2 w-full rounded-full" style={{ background: gradient }}>
+          {[25, 50, 75].map((pct) => (
+            <div
+              key={pct}
+              className="absolute top-0 bottom-0 w-0.5 bg-content1"
+              style={{ left: `${pct}%` }}
+            />
+          ))}
+        </div>
+
+        <div className="relative h-4">
+          {ticks.map((value, i) => {
+            const pct = (i / (TICK_COUNT - 1)) * 100;
+            const isFirst = i === 0;
+            const isLast = i === TICK_COUNT - 1;
+            return (
+              <span
+                key={i}
+                className="absolute text-tiny text-default-500"
                 style={{
-                  left: Math.max(16, Math.min(hoverX, 144)),
+                  left: isLast ? undefined : `${pct}%`,
+                  right: isLast ? 0 : undefined,
+                  transform: !isFirst && !isLast ? "translateX(-50%)" : undefined,
                 }}
               >
-                {Math.round(hoverValue)}{metric.unit}
-              </div>
-            </>
-          )}
-        </div>
-
-        <div className="flex justify-between">
-          <span className="text-tiny text-default-500">
-            {metric.stops[0].value}{metric.unit}
-          </span>
-          <span className="text-tiny text-default-500">
-            {metric.stops[metric.stops.length - 1].value}{metric.unit}
-          </span>
-        </div>
-
-        <div className="flex justify-center">
-          <Pagination
-            total={METRIC_ORDER.length}
-            page={page}
-            onChange={(p) => onMetricChange(METRIC_ORDER[p - 1])}
-            size="sm"
-            variant="light"
-            classNames={{ cursor: "bg-default-400" }}
-          />
+                {value}{metric.unit}
+              </span>
+            );
+          })}
         </div>
       </CardBody>
     </Card>

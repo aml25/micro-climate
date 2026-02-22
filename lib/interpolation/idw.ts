@@ -1,5 +1,3 @@
-import { featureCollection } from "@turf/helpers";
-import type { FeatureCollection, Polygon, GeoJsonProperties } from "geojson";
 import type { PWSStation } from "@/types/weather";
 
 // SF bounding box
@@ -27,26 +25,33 @@ export function haversineKm(lat1: number, lon1: number, lat2: number, lon2: numb
   return R * 2 * Math.asin(Math.sqrt(a));
 }
 
+export interface CellData {
+  temperature: number;
+  humidity: number;
+  windspeedmph: number;
+  alpha: number;
+}
+
+export interface GridResult {
+  cols: number;
+  rows: number;
+  /** Geographic outer edges of the grid (not cell centers) */
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+  /** Row-major: row 0 = southmost row, col 0 = westmost col */
+  cells: CellData[];
+}
+
 export function interpolateTemperatures(
   stations: PWSStation[],
   bbox: [number, number, number, number] = SF_BBOX,
   cellSizeKm = 0.5,
-): FeatureCollection<Polygon, GeoJsonProperties> {
-  if (stations.length === 0) {
-    return featureCollection([]) as FeatureCollection<Polygon, GeoJsonProperties>;
-  }
+): GridResult | null {
+  if (stations.length === 0) return null;
 
   const [west, south, east, north] = bbox;
-
-  // Safety cap — bail out before touching every cell of a massive viewport
-  const MAX_CELLS = 20_000;
-  const midLatEst = (south + north) / 2;
-  const cosLatEst = Math.cos((midLatEst * Math.PI) / 180);
-  const estLonCells = Math.ceil((east - west) / (cellSizeKm / (KM_PER_DEG * cosLatEst)));
-  const estLatCells = Math.ceil((north - south) / (cellSizeKm / KM_PER_DEG));
-  if (estLonCells * estLatCells > MAX_CELLS) {
-    return featureCollection([]) as FeatureCollection<Polygon, GeoJsonProperties>;
-  }
 
   // Precompute cosLat once for flat-earth lon→km conversion
   const midLat = (south + north) / 2;
@@ -58,12 +63,22 @@ export function interpolateTemperatures(
   const hLat = dLat / 2;
   const hLon = dLon / 2;
 
+  // Count actual grid dimensions (two cheap dry-run loops, no body work)
+  let cols = 0;
+  for (let cx = west + hLon; cx < east; cx += dLon) cols++;
+  let rows = 0;
+  for (let cy = south + hLat; cy < north; cy += dLat) rows++;
+
+  const MAX_CELLS = 20_000;
+  if (cols * rows > MAX_CELLS || cols === 0 || rows === 0) return null;
+
   // Precompute station positions scaled to km (avoids repeated multiply in inner loop)
   const sLat = stations.map((s) => s.lat * KM_PER_DEG);
   const sLon = stations.map((s) => s.lon * cosLat * KM_PER_DEG);
 
-  const features = [];
+  const cells: CellData[] = new Array(cols * rows);
   const n = stations.length;
+  let cellIdx = 0;
 
   for (let cy = south + hLat; cy < north; cy += dLat) {
     const cyKm = cy * KM_PER_DEG;
@@ -104,27 +119,28 @@ export function interpolateTemperatures(
         : minDistKm >= FADE_END_KM ? 0.0
         : 1.0 - (minDistKm - FADE_START_KM) / (FADE_END_KM - FADE_START_KM);
 
-      if (alpha === 0) continue;
+      if (alpha === 0) {
+        // Transparent cell — skip value computation, color is irrelevant
+        cells[cellIdx++] = { temperature: 0, humidity: 0, windspeedmph: 0, alpha: 0 };
+        continue;
+      }
 
-      const temperature  = exactIdx >= 0 ? stations[exactIdx].tempF        : tempSum / wSum;
-      const humidity     = exactIdx >= 0 ? stations[exactIdx].humidity      : humSum  / wSum;
-      const windspeedmph = exactIdx >= 0 ? stations[exactIdx].windspeedmph  : windSum / wSum;
-
-      const ring = [
-        [cx - hLon, cy - hLat],
-        [cx + hLon, cy - hLat],
-        [cx + hLon, cy + hLat],
-        [cx - hLon, cy + hLat],
-        [cx - hLon, cy - hLat],
-      ];
-
-      features.push({
-        type: "Feature" as const,
-        geometry: { type: "Polygon" as const, coordinates: [ring] },
-        properties: { temperature, humidity, windspeedmph, alpha },
-      });
+      cells[cellIdx++] = {
+        temperature:  exactIdx >= 0 ? stations[exactIdx].tempF        : tempSum / wSum,
+        humidity:     exactIdx >= 0 ? stations[exactIdx].humidity      : humSum  / wSum,
+        windspeedmph: exactIdx >= 0 ? stations[exactIdx].windspeedmph  : windSum / wSum,
+        alpha,
+      };
     }
   }
 
-  return featureCollection(features) as FeatureCollection<Polygon, GeoJsonProperties>;
+  return {
+    cols,
+    rows,
+    west,
+    south,
+    east: west + cols * dLon,
+    north: south + rows * dLat,
+    cells,
+  };
 }

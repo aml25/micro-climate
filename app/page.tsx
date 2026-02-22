@@ -109,18 +109,18 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Last-updated chip */}
-      {fetchedAt && (
-        <div className="absolute bottom-6 left-3 z-20">
-          <Chip color="default" variant="flat" size="sm">
-            Updated {new Date(fetchedAt).toLocaleTimeString()}
-          </Chip>
+      {/* Bottom bar: "Updated" chip stacked above full-width legend card */}
+      <div className="absolute bottom-0 inset-x-0 z-20 flex flex-col items-start gap-2 p-3 pointer-events-none">
+        {fetchedAt && (
+          <div className="pointer-events-auto">
+            <Chip color="default" variant="flat" size="sm">
+              Updated {new Date(fetchedAt).toLocaleTimeString()}
+            </Chip>
+          </div>
+        )}
+        <div className="w-full pointer-events-auto">
+          <Legend activeMetric={activeMetric} onMetricChange={setActiveMetric} />
         </div>
-      )}
-
-      {/* Legend + metric switcher */}
-      <div className="absolute bottom-6 right-3 z-20">
-        <Legend activeMetric={activeMetric} onMetricChange={setActiveMetric} />
       </div>
     </div>
   );
