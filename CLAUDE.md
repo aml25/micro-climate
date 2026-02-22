@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Working Instructions
 
-Before committing, always update `CLAUDE.md` and `README.md` to reflect any changes made — without being asked. Commit the doc updates in the same commit as the code, or as an immediate follow-up if the code was already committed.
+Update `CLAUDE.md` and `README.md` incrementally as features are built — not all at once before a commit. After each meaningful change (new feature, architectural decision, removed approach), update the relevant section immediately while the context is fresh. Before committing, verify the docs are current. Commit doc updates in the same commit as the code, or as an immediate follow-up if the code was already committed.
 
 ---
 
