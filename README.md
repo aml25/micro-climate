@@ -32,8 +32,7 @@ npm run dev     # http://localhost:3000
 
 - **On load** — the browser requests your location. Grant it and the map flies to you and loads nearby stations. Deny it and the map falls back to San Francisco.
 - **Pan/zoom** — the heatmap recomputes as you move. When you pan more than ~10 miles from the last fetch point, new stations are loaded automatically.
-- **Metric switcher** — use the pagination dots in the legend (bottom right) to cycle between temperature, humidity, and wind speed.
-- **Legend hover** — hover over the color gradient to see interpolated values across the scale.
+- **Metric switcher** — use the tabs in the legend bar (bottom of screen) to switch between temperature, humidity, and wind speed.
 - **Station markers** — off by default. Enable in the browser console: `__showStationMarkers(true)`
 
 ## Build & Lint

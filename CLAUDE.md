@@ -45,9 +45,9 @@ npm run lint   # ESLint check
 - Flat-earth distance approximation (no sin/cos/asin in inner loop — just multiply/add/sqrt)
 - `cosLat` precomputed once per call; station positions scaled to km upfront
 - One `sqrt` per cell (for the organic boundary alpha), not per station
-- Returns GeoJSON `FeatureCollection<Polygon>` with `{ temperature, humidity, windspeedmph, alpha }` on each feature
-- Safety cap: `MAX_CELLS = 20,000` — bails out early if bbox would generate too many cells
-- Skips computation entirely when zoom < `MIN_ZOOM` (7) — bbox is set to `null` in `HeatmapLayer`
+- Returns `GridResult` — a flat `CellData[]` array (row-major, south-to-north) plus `cols`, `rows`, and geographic outer edges (`west/south/east/north`). No GeoJSON — polygon ring construction was eliminated entirely.
+- Safety cap: `MAX_CELLS = 20,000` — returns `null` if bbox would generate too many cells
+- Skips computation entirely when zoom < `MIN_ZOOM` (7) — bbox is set to `null` in `HeatmapCanvas`
 
 ### Heatmap rendering
 
@@ -59,7 +59,8 @@ npm run lint   # ESLint check
 - **Render loop split**: IDW recomputes on `moveend` (expensive, stored in `gridRef`); canvas redraws on every `move` frame (cheap, reads from ref) — smooth animation during pan/zoom
 - `renderFrame` uses refs (`gridRef`, `activeMetricRef`, `zoomRef`) for all changing data — stable callback identity means map event listeners are never re-registered
 - Canvas sized to match Mapbox GL canvas physical dimensions; `ctx.scale(dpr, dpr)` for correct CSS pixel drawing
-- Each cell projected via `map.project([lon, lat])` → screen coords, drawn with `fillRect` using cell's bounding box + 0.5px bleed on each edge to eliminate sub-pixel gaps (grid lines)
+- **Smooth gradients via offscreen canvas**: each IDW cell is one pixel in a tiny offscreen canvas (`cols × rows`); `ctx.drawImage` scales it up to screen size with `imageSmoothingQuality: "high"` — browser bilinear interpolation smooths between cells automatically, eliminating blocky grid tiles
+- Grid is row-major south-to-north; y-axis is flipped when writing `ImageData` (ImageData row 0 = top = north)
 - `valueToRgb` JS color interpolation mirrors Mapbox's `interpolate linear` expression
 - Tracks `bbox` and `cellSize` (bucketed zoom) separately — raw zoom changes within the same bucket don't retrigger the grid
 - Bbox deduplication (value comparison before `setState`) prevents spurious memo invalidation
@@ -73,7 +74,7 @@ npm run lint   # ESLint check
 - `temperature` (°F), `humidity` (%), `windspeedmph` (mph)
 - Each has `label`, `unit`, and color `stops` (value → hex)
 - `METRICS` drives both the Legend gradient and the `valueToRgb` color mapping in `HeatmapCanvas`
-- `METRIC_ORDER` defines pagination order in the Legend
+- `METRIC_ORDER` defines tab order in the Legend
 
 ---
 
@@ -91,7 +92,7 @@ npm run lint   # ESLint check
 | `components/Map/MapContainer.tsx` | Map wrapper; GeolocateControl; native movestart listener for abort |
 | `components/Map/HeatmapCanvas.tsx` | Canvas overlay heatmap; viewport tracking; multiply blend; fade animations |
 | `components/Map/StationMarkers.tsx` | Circle layer + HeroUI Tooltip (off by default — see below) |
-| `components/Map/Legend.tsx` | Gradient bar with hover tooltip; HeroUI Pagination for metric switching |
+| `components/Map/Legend.tsx` | Full-width gradient bar; HeroUI Tabs for metric switching; 5 axis tick labels |
 | `types/weather.ts` | `PWSStation`, `StationsResponse` interfaces |
 
 ---
@@ -146,6 +147,17 @@ During the `HeatmapLayer` era:
 Core issue: Mapbox GL JS has no per-layer CSS `mix-blend-mode` equivalent in WebGL. The slot system only controls z-ordering, not color blending — so the heatmap always obscured or was obscured by map features rather than blending with them.
 
 Solution: replaced `HeatmapLayer` (GeoJSON `Source` + `Layer`) with `HeatmapCanvas` — an HTML `<canvas>` absolutely positioned over the map with `mix-blend-mode: multiply` in CSS. Switched base style to `streets-v12` (cream/white base + dark charcoal roads) and desaturated it with `.mapboxgl-canvas { filter: grayscale(100%) }`. Result: roads show as clearly darker streaks through the vivid heatmap color; green forests and blue water no longer tint the overlay. Both map and heatmap are simultaneously sharp.
+
+### GeoJSON → flat GridResult in IDW
+Originally `interpolateTemperatures` returned a `FeatureCollection<Polygon>` — each cell was a GeoJSON polygon with a ring of 5 coordinate pairs. This was wasteful since `HeatmapCanvas` only needed the value and alpha per cell, not geometry. Replaced with `GridResult` (`cols`, `rows`, `cells[]`, geographic bounds). Eliminated all polygon ring construction and the `@turf/helpers` import.
+
+### Smooth gradients via offscreen canvas scaling
+The canvas overlay initially drew each IDW cell as a `fillRect`, producing visible grid lines and blocky tiles. Fixed by writing each cell as a single pixel into an `ImageData` buffer on a tiny offscreen canvas (`cols × rows` pixels), then scaling it up to screen size with `ctx.drawImage` + `imageSmoothingQuality: "high"`. The browser's bilinear interpolation smooths between cells automatically — no custom interpolation code needed.
+
+### Legend: Pagination → Tabs, full-width, axis ticks
+- Replaced HeroUI `Pagination` dots with labeled `Tabs` ("Temperature", "Wind", "Humidity")
+- Card moved from bottom-right corner to full-width bottom bar; "Updated" chip stacks above it
+- Removed hover tooltip interaction; replaced start/end labels with 5 evenly-spaced axis labels at 0/25/50/75/100% of the value range; 3 `bg-content1` tick marks divide the gradient bar visually into 4 sections; intermediate labels centered on their ticks
 
 ### Bbox padding reduction (0.5 → 0.2)
 Original 50% padding on each side = 4× viewport area to compute. Reduced to 20% (2.25× viewport). Enough to cover small pans without recompute, while significantly reducing cell count.
